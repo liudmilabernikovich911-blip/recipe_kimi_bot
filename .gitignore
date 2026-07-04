@@ -1,0 +1,9 @@
+echo "pycache/
+venv/
+.env
+*.pyc
+.DS_Store
+*.log" > .gitignore.env
+.env
+__pycache__/
+*.pyc
