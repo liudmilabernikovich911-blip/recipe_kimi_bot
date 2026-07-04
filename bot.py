@@ -163,15 +163,17 @@ def run_polling() -> None:
     telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     setup_handlers(telegram_app)
 
-    async def start() -> None:
+    async def polling_loop() -> None:
         await telegram_app.initialize()
         await telegram_app.start()
-        await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        await telegram_app.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
         logger.info("🤖 Bot started in POLLING mode!")
-        # Бесконечное ожидание — поток остаётся живым
         await asyncio.Event().wait()
 
-    loop.run_until_complete(start())
+    loop.run_until_complete(polling_loop())
 
 
 def run_webhook_mode() -> None:
@@ -184,15 +186,14 @@ def run_webhook_mode() -> None:
     telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     setup_handlers(telegram_app)
 
-    async def init() -> None:
+    async def webhook_loop() -> None:
         await telegram_app.initialize()
         await telegram_app.start()
         await telegram_app.bot.set_webhook(WEBHOOK_URL)
         logger.info(" Bot started in WEBHOOK mode! URL: %s", WEBHOOK_URL)
-        # Держим поток живым
         await asyncio.Event().wait()
 
-    loop.run_until_complete(init())
+    loop.run_until_complete(webhook_loop())
 # ========== FLASK ROUTES ==========
 
 @flask_app.route('/')
