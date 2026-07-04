@@ -22,6 +22,7 @@ from config import (
     KIMI_MODEL,
     WEBHOOK_URL,
 )
+
 from utils import detect_language, get_texts
 
 logging.basicConfig(
@@ -102,7 +103,7 @@ async def handle_ingredients(update: Update, _context: Any) -> None:
         keyboard = [[InlineKeyboardButton(t["restart_btn"], callback_data="restart")]]
         markup = InlineKeyboardMarkup(keyboard)
         if len(recipes) > 4096:
-            parts = [recipes[i : i + 4000] for i in range(0, len(recipes), 4000)]
+            parts = [recipes[i: i + 4000] for i in range(0, len(recipes), 4000)]
             for i, part in enumerate(parts):
                 prefix = f"📄 Part {i + 1}/{len(parts)}\n\n" if len(parts) > 1 else ""
                 if i == len(parts) - 1:
@@ -146,14 +147,15 @@ def setup_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start))  # type: ignore[arg-type]
     application.add_handler(CommandHandler("help", help_command))  # type: ignore[arg-type]
     application.add_handler(CallbackQueryHandler(restart_callback, pattern="^restart$"))  # type: ignore[arg-type]
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ingredients))  # type: ignore[arg-type]
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ingredients))  # type: ignore[arg-type]
     application.add_error_handler(error_handler)  # type: ignore[arg-type]
 
 
 # ========== BOT THREADS ==========
 
 def run_polling() -> None:
-    """Polling работает в отдельном потоке со своим event loop."""
+    """Polling в отдельном потоке — без сигналов, которые не работают в daemon thread."""
     global telegram_app
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -161,12 +163,19 @@ def run_polling() -> None:
     telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     setup_handlers(telegram_app)
 
-    logger.info("🤖 Bot started in POLLING mode!")
-    telegram_app.run_polling(allowed_updates=Update.ALL_TYPES)
+    async def start() -> None:
+        await telegram_app.initialize()
+        await telegram_app.start()
+        await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        logger.info("🤖 Bot started in POLLING mode!")
+        # Бесконечное ожидание — поток остаётся живым
+        await asyncio.Event().wait()
+
+    loop.run_until_complete(start())
 
 
 def run_webhook_mode() -> None:
-    """Webhook: инициализируем бота, но запросы принимает Flask."""
+    """Webhook: инициализируем бота, Flask принимает запросы."""
     global telegram_app, bot_loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -179,12 +188,11 @@ def run_webhook_mode() -> None:
         await telegram_app.initialize()
         await telegram_app.start()
         await telegram_app.bot.set_webhook(WEBHOOK_URL)
-        logger.info("🤖 Bot started in WEBHOOK mode! URL: %s", WEBHOOK_URL)
+        logger.info(" Bot started in WEBHOOK mode! URL: %s", WEBHOOK_URL)
+        # Держим поток живым
+        await asyncio.Event().wait()
 
     loop.run_until_complete(init())
-    loop.run_forever()
-
-
 # ========== FLASK ROUTES ==========
 
 @flask_app.route('/')

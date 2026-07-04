@@ -7,3 +7,7 @@ venv/
 .env
 __pycache__/
 *.pyc
+.idea/
+recipe-kimi-bot/
+__pycache__/
+*.pyc
