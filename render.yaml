@@ -15,3 +15,4 @@ services:
         sync: false
       - key: KIMI_API_KEY
         sync: false
+        startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT bot:flask_app
