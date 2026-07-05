@@ -156,6 +156,10 @@ def setup_handlers(application: Application) -> None:
 
 
 # ========== BOT THREADS ==========
+@flask_app.before_request
+def log_request():
+    logger.info("Request: %s %s", request.method, request.path)
+
 
 def run_polling() -> None:
     global telegram_app
