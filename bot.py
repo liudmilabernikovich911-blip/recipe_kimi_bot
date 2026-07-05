@@ -20,8 +20,8 @@ from config import (
     KIMI_API_KEY,
     KIMI_API_URL,
     KIMI_MODEL,
-    WEBHOOK_URL,
 )
+WEBHOOK_URL = "https://recipe-kimi-bot-1-8biv.onrender.com/telegram-webhook"
 from utils import detect_language, get_texts
 
 logging.basicConfig(
