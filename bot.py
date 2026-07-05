@@ -4,6 +4,8 @@ import os
 import threading
 from typing import Any
 
+from utils import detect_language, get_texts
+
 import httpx
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
