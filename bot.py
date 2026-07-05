@@ -25,6 +25,7 @@ from config import (
     WEBHOOK_URL,
 )
 
+port = int(os.environ.get("PORT", "5000"))
 from utils import detect_language, get_texts
 
 logging.basicConfig(
