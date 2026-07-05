@@ -2,9 +2,6 @@ import asyncio
 import logging
 import os
 import threading
-from typing import Any
-
-from utils import detect_language, get_texts
 
 import httpx
 from flask import Flask, request
@@ -14,6 +11,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ContextTypes,
     filters,
 )
 
@@ -24,8 +22,6 @@ from config import (
     KIMI_MODEL,
     WEBHOOK_URL,
 )
-
-port = int(os.environ.get("PORT", "5000"))
 from utils import detect_language, get_texts
 
 logging.basicConfig(
@@ -43,7 +39,8 @@ bot_loop: asyncio.AbstractEventLoop | None = None
 
 # ========== HANDLERS ==========
 
-async def start(update: Update, _context: Any) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
     msg = update.message
     if not isinstance(msg, Message):
         return
@@ -54,7 +51,8 @@ async def start(update: Update, _context: Any) -> None:
     await msg.reply_text(t["welcome"])
 
 
-async def help_command(update: Update, _context: Any) -> None:
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
     msg = update.message
     if not isinstance(msg, Message):
         return
@@ -88,7 +86,8 @@ async def fetch_recipes(ingredients: str, lang: str) -> str:
             raise Exception(f"Kimi API {resp.status_code}: {resp.text}")
 
 
-async def handle_ingredients(update: Update, _context: Any) -> None:
+async def handle_ingredients(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
     msg = update.message
     if not isinstance(msg, Message) or not msg.text:
         return
@@ -123,7 +122,8 @@ async def handle_ingredients(update: Update, _context: Any) -> None:
         await processing_msg.edit_text(t["error"])
 
 
-async def restart_callback(update: Update, _context: Any) -> None:
+async def restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
     query = update.callback_query
     if not query:
         return
@@ -137,8 +137,8 @@ async def restart_callback(update: Update, _context: Any) -> None:
         await callback_msg.reply_text(t["restart_prompt"])
 
 
-async def error_handler(update: Update, _context: Any) -> None:
-    logger.error("Update %s caused error %s", update, _context.error)
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Update %s caused error %s", update, context.error)
     err_msg = update.message
     if isinstance(err_msg, Message):
         await err_msg.reply_text("😔 Unexpected error. Please try again.")
@@ -147,18 +147,17 @@ async def error_handler(update: Update, _context: Any) -> None:
 # ========== SETUP ==========
 
 def setup_handlers(application: Application) -> None:
-    application.add_handler(CommandHandler("start", start))  # type: ignore[arg-type]
-    application.add_handler(CommandHandler("help", help_command))  # type: ignore[arg-type]
-    application.add_handler(CallbackQueryHandler(restart_callback, pattern="^restart$"))  # type: ignore[arg-type]
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CallbackQueryHandler(restart_callback, pattern="^restart$"))
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ingredients))  # type: ignore[arg-type]
-    application.add_error_handler(error_handler)  # type: ignore[arg-type]
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ingredients))
+    application.add_error_handler(error_handler)
 
 
 # ========== BOT THREADS ==========
 
 def run_polling() -> None:
-    """Polling в отдельном потоке — без сигналов, которые не работают в daemon thread."""
     global telegram_app
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -180,7 +179,6 @@ def run_polling() -> None:
 
 
 def run_webhook_mode() -> None:
-    """Webhook: инициализируем бота, Flask принимает запросы."""
     global telegram_app, bot_loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -193,10 +191,12 @@ def run_webhook_mode() -> None:
         await telegram_app.initialize()
         await telegram_app.start()
         await telegram_app.bot.set_webhook(WEBHOOK_URL)
-        logger.info(" Bot started in WEBHOOK mode! URL: %s", WEBHOOK_URL)
+        logger.info("🤖 Bot started in WEBHOOK mode! URL: %s", WEBHOOK_URL)
         await asyncio.Event().wait()
 
     loop.run_until_complete(webhook_loop())
+
+
 # ========== FLASK ROUTES ==========
 
 @flask_app.route('/')
@@ -206,10 +206,13 @@ def health() -> tuple[str, int]:
 
 @flask_app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook() -> tuple[str, int]:
+    logger.info("=== WEBHOOK HIT ===")
     if telegram_app is None or bot_loop is None:
+        logger.error("Bot not ready")
         return "Bot not ready", 503
 
     json_data = request.get_json(force=True, silent=True) or {}
+    logger.info("Data keys: %s", list(json_data.keys()) if json_data else "empty")
     update = Update.de_json(json_data, telegram_app.bot)
 
     asyncio.run_coroutine_threadsafe(
@@ -234,5 +237,6 @@ if __name__ == '__main__':
 
     bot_thread.start()
 
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", "5000"))
+    logger.info("Starting Flask on port %s", port)
     flask_app.run(host='0.0.0.0', port=port)
