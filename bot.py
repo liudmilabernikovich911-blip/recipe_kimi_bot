@@ -17,11 +17,12 @@ from telegram.ext import (
 
 from config import (
     TELEGRAM_BOT_TOKEN,
-    KIMI_API_KEY,
-    KIMI_API_URL,
-    KIMI_MODEL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_API_URL,
+    DEEPSEEK_MODEL,
+    WEBHOOK_URL,
 )
-WEBHOOK_URL = "https://recipe-kimi-bot-1-8biv.onrender.com/telegram-webhook"
+
 from utils import detect_language, get_texts
 
 logging.basicConfig(
@@ -65,11 +66,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def fetch_recipes(ingredients: str, lang: str) -> str:
     t = get_texts(lang)
     headers = {
-        "Authorization": f"Bearer {KIMI_API_KEY}",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": KIMI_MODEL,
+        "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": t["system_prompt"]},
             {"role": "user", "content": t["user_prompt"].format(ingredients=ingredients)},
@@ -78,12 +79,12 @@ async def fetch_recipes(ingredients: str, lang: str) -> str:
         "max_tokens": 2000,
     }
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(KIMI_API_URL, headers=headers, json=payload)
+        resp = await client.post(DEEPSEEK_API_URL, headers=headers, json=payload)
         if resp.status_code == 200:
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         else:
-            raise Exception(f"Kimi API {resp.status_code}: {resp.text}")
+            raise Exception(f"DeepSeek API {resp.status_code}: {resp.text}")
 
 
 async def handle_ingredients(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -105,9 +106,9 @@ async def handle_ingredients(update: Update, context: ContextTypes.DEFAULT_TYPE)
         keyboard = [[InlineKeyboardButton(t["restart_btn"], callback_data="restart")]]
         markup = InlineKeyboardMarkup(keyboard)
         if len(recipes) > 4096:
-            parts = [recipes[i: i + 4000] for i in range(0, len(recipes), 4000)]
+            parts = [recipes[i : i + 4000] for i in range(0, len(recipes), 4000)]
             for i, part in enumerate(parts):
-                prefix = f"📄 Part {i + 1}/{len(parts)}\n\n" if len(parts) > 1 else ""
+                prefix = f" Part {i + 1}/{len(parts)}\n\n" if len(parts) > 1 else ""
                 if i == len(parts) - 1:
                     await msg.reply_text(prefix + part, reply_markup=markup)
                 else:
@@ -151,7 +152,8 @@ def setup_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(restart_callback, pattern="^restart$"))
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ingredients))
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ingredients)
+    )
     application.add_error_handler(error_handler)
 
 
@@ -203,12 +205,12 @@ def run_webhook_mode() -> None:
 
 # ========== FLASK ROUTES ==========
 
-@flask_app.route('/')
+@flask_app.route("/")
 def health() -> tuple[str, int]:
     return "Bot is running", 200
 
 
-@flask_app.route('/telegram-webhook', methods=['POST'])
+@flask_app.route("/telegram-webhook", methods=["POST"])
 def telegram_webhook() -> tuple[str, int]:
     logger.info("=== WEBHOOK HIT ===")
     if telegram_app is None or bot_loop is None:
@@ -221,18 +223,18 @@ def telegram_webhook() -> tuple[str, int]:
 
     asyncio.run_coroutine_threadsafe(
         telegram_app.process_update(update),
-        bot_loop
+        bot_loop,
     )
     return "OK", 200
 
 
 # ========== MAIN ==========
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN.startswith("ВАШ_"):
         raise SystemExit("❌ Укажите TELEGRAM_BOT_TOKEN в Environment Variables!")
-    if not KIMI_API_KEY or KIMI_API_KEY.startswith("ВАШ_"):
-        raise SystemExit("❌ Укажите KIMI_API_KEY в Environment Variables!")
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY.startswith("ВАШ_"):
+        raise SystemExit("❌ Укажите DEEPSEEK_API_KEY в Environment Variables!")
 
     if WEBHOOK_URL:
         bot_thread = threading.Thread(target=run_webhook_mode, daemon=True)
@@ -243,4 +245,5 @@ if __name__ == '__main__':
 
     port = int(os.environ.get("PORT", "5000"))
     logger.info("Starting Flask on port %s", port)
-    flask_app.run(host='0.0.0.0', port=port)
+    flask_app.run(host="0.0.0.0", port=port)
+
