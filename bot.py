@@ -190,7 +190,14 @@ def run_webhook_mode() -> None:
     asyncio.set_event_loop(loop)
     bot_loop = loop
 
-    telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # ВАЖНО: .updater(None) — не запускаем встроенный polling,
+    # т.к. webhook обрабатывает Flask
+    telegram_app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .updater(None)
+        .build()
+    )
     setup_handlers(telegram_app)
 
     async def webhook_loop() -> None:
@@ -246,4 +253,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     logger.info("Starting Flask on port %s", port)
     flask_app.run(host="0.0.0.0", port=port)
-
