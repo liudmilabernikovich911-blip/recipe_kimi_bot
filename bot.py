@@ -3,7 +3,6 @@ import logging
 import os
 import threading
 
-import httpx
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.ext import (
@@ -15,24 +14,22 @@ from telegram.ext import (
     filters,
 )
 
-from config import (
-    TELEGRAM_BOT_TOKEN,
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_API_URL,
-    DEEPSEEK_MODEL,
-    WEBHOOK_URL,
-)
-
+from config import TELEGRAM_BOT_TOKEN, WEBHOOK_URL
+from providers import RecipeService
 from utils import detect_language, get_texts
 
+# ─── Logging ───
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
+# ─── State ───
 user_lang: dict[int, str] = {}
+recipe_service = RecipeService()
 
+# ─── Flask ───
 flask_app = Flask(__name__)
 telegram_app: Application | None = None
 bot_loop: asyncio.AbstractEventLoop | None = None
@@ -41,15 +38,14 @@ bot_loop: asyncio.AbstractEventLoop | None = None
 # ========== HANDLERS ==========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _ = context
+    _ = context  # подавляет warning "parameter is not used"
     msg = update.message
     if not isinstance(msg, Message):
         return
     uid = update.effective_user.id
     code = (update.effective_user.language_code or "en").lower()
     user_lang[uid] = "ru" if code.startswith("ru") else "en"
-    t = get_texts(user_lang[uid])
-    await msg.reply_text(t["welcome"])
+    await msg.reply_text(get_texts(user_lang[uid])["welcome"])
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -57,69 +53,54 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     msg = update.message
     if not isinstance(msg, Message):
         return
-    uid = update.effective_user.id
-    lang = user_lang.get(uid, "en")
-    t = get_texts(lang)
-    await msg.reply_text(t["help"])
-
-
-async def fetch_recipes(ingredients: str, lang: str) -> str:
-    t = get_texts(lang)
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {"role": "system", "content": t["system_prompt"]},
-            {"role": "user", "content": t["user_prompt"].format(ingredients=ingredients)},
-        ],
-        "temperature": 0.7,
-        "max_tokens": 2000,
-    }
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(DEEPSEEK_API_URL, headers=headers, json=payload)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-        else:
-            raise Exception(f"DeepSeek API {resp.status_code}: {resp.text}")
+    lang = user_lang.get(update.effective_user.id, "en")
+    await msg.reply_text(get_texts(lang)["help"])
 
 
 async def handle_ingredients(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _ = context
+    _ = context  # <-- добавлено: раньше не использовался, IDE ругалась
     msg = update.message
     if not isinstance(msg, Message) or not msg.text:
         return
+
     ingredients = msg.text
     user = update.effective_user
     uid = user.id
     lang = detect_language(ingredients)
     user_lang[uid] = lang
     t = get_texts(lang)
+
     logger.info("User %s (%s) sent: %s", uid, user.username, ingredients)
     processing_msg = await msg.reply_text(t["processing"])
+
     try:
-        recipes = await fetch_recipes(ingredients, lang)
+        recipes = await recipe_service.get_recipes(
+            system_prompt=t["system_prompt"],
+            user_prompt=t["user_prompt"].format(ingredients=ingredients),
+        )
+
         await processing_msg.delete()
+
         keyboard = [[InlineKeyboardButton(t["restart_btn"], callback_data="restart")]]
         markup = InlineKeyboardMarkup(keyboard)
-        if len(recipes) > 4096:
-            parts = [recipes[i : i + 4000] for i in range(0, len(recipes), 4000)]
+
+        header = f"{t['recipes_header']}\n\n"
+        full_text = header + recipes
+
+        # Telegram лимит 4096 символов
+        if len(full_text) > 4096:
+            parts = [full_text[i : i + 4000] for i in range(0, len(full_text), 4000)]
             for i, part in enumerate(parts):
-                prefix = f" Part {i + 1}/{len(parts)}\n\n" if len(parts) > 1 else ""
+                prefix = f"📄 Часть {i + 1}/{len(parts)}\n\n" if len(parts) > 1 else ""
                 if i == len(parts) - 1:
                     await msg.reply_text(prefix + part, reply_markup=markup)
                 else:
                     await msg.reply_text(prefix + part)
         else:
-            await msg.reply_text(
-                f"{t['recipes_header']}\n\n{recipes}",
-                reply_markup=markup,
-            )
+            await msg.reply_text(full_text, reply_markup=markup)
+
     except Exception as exc:
-        logger.error("Error: %s", exc)
+        logger.error("Recipe error: %s", exc, exc_info=True)
         await processing_msg.edit_text(t["error"])
 
 
@@ -133,16 +114,15 @@ async def restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     lang = user_lang.get(uid, "en")
     t = get_texts(lang)
     await query.edit_message_reply_markup(reply_markup=None)
-    callback_msg = query.message
-    if isinstance(callback_msg, Message):
-        await callback_msg.reply_text(t["restart_prompt"])
+    if isinstance(query.message, Message):
+        await query.message.reply_text(t["restart_prompt"])
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # context используется через context.error — warning не должен появляться
     logger.error("Update %s caused error %s", update, context.error)
-    err_msg = update.message
-    if isinstance(err_msg, Message):
-        await err_msg.reply_text("😔 Unexpected error. Please try again.")
+    if update and isinstance(update.message, Message):
+        await update.message.reply_text("😔 Unexpected error. Please try again.")
 
 
 # ========== SETUP ==========
@@ -157,11 +137,7 @@ def setup_handlers(application: Application) -> None:
     application.add_error_handler(error_handler)
 
 
-# ========== BOT THREADS ==========
-@flask_app.before_request
-def log_request():
-    logger.info("Request: %s %s", request.method, request.path)
-
+# ========== BOT THREADS (Render-friendly) ==========
 
 def run_polling() -> None:
     global telegram_app
@@ -190,12 +166,10 @@ def run_webhook_mode() -> None:
     asyncio.set_event_loop(loop)
     bot_loop = loop
 
-    # ВАЖНО: .updater(None) — не запускаем встроенный polling,
-    # т.к. webhook обрабатывает Flask
     telegram_app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
-        .updater(None)
+        .updater(None)          # отключаем встроенный polling
         .build()
     )
     setup_handlers(telegram_app)
@@ -203,7 +177,10 @@ def run_webhook_mode() -> None:
     async def webhook_loop() -> None:
         await telegram_app.initialize()
         await telegram_app.start()
-        await telegram_app.bot.set_webhook(WEBHOOK_URL)
+        await telegram_app.bot.set_webhook(
+            url=WEBHOOK_URL,
+            allowed_updates=Update.ALL_TYPES,
+        )
         logger.info("🤖 Bot started in WEBHOOK mode! URL: %s", WEBHOOK_URL)
         await asyncio.Event().wait()
 
@@ -212,6 +189,11 @@ def run_webhook_mode() -> None:
 
 # ========== FLASK ROUTES ==========
 
+@flask_app.before_request
+def log_request():
+    logger.info("Request: %s %s", request.method, request.path)
+
+
 @flask_app.route("/")
 def health() -> tuple[str, int]:
     return "Bot is running", 200
@@ -219,13 +201,11 @@ def health() -> tuple[str, int]:
 
 @flask_app.route("/telegram-webhook", methods=["POST"])
 def telegram_webhook() -> tuple[str, int]:
-    logger.info("=== WEBHOOK HIT ===")
     if telegram_app is None or bot_loop is None:
         logger.error("Bot not ready")
         return "Bot not ready", 503
 
     json_data = request.get_json(force=True, silent=True) or {}
-    logger.info("Data keys: %s", list(json_data.keys()) if json_data else "empty")
     update = Update.de_json(json_data, telegram_app.bot)
 
     asyncio.run_coroutine_threadsafe(
@@ -240,8 +220,10 @@ def telegram_webhook() -> tuple[str, int]:
 if __name__ == "__main__":
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN.startswith("ВАШ_"):
         raise SystemExit("❌ Укажите TELEGRAM_BOT_TOKEN в Environment Variables!")
-    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY.startswith("ВАШ_"):
-        raise SystemExit("❌ Укажите DEEPSEEK_API_KEY в Environment Variables!")
+
+    # Хотя бы один ключ должен быть (проверяется в RecipeService.__init__)
+    if not recipe_service.providers:
+        raise SystemExit("❌ Укажите DEEPSEEK_API_KEY и/или OPENROUTER_API_KEY!")
 
     if WEBHOOK_URL:
         bot_thread = threading.Thread(target=run_webhook_mode, daemon=True)
@@ -251,5 +233,5 @@ if __name__ == "__main__":
     bot_thread.start()
 
     port = int(os.environ.get("PORT", "5000"))
-    logger.info("Starting Flask on port %s", port)
+    logger.info("Starting Flask on 0.0.0.0:%s", port)
     flask_app.run(host="0.0.0.0", port=port)
