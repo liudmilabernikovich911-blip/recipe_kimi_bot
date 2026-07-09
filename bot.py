@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN, WEBHOOK_URL
-from providers import RecipeService
+from recipe_providers import RecipeService
 from utils import detect_language, get_texts
 
 # ─── Logging ───
